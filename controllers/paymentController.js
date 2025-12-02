@@ -13,16 +13,20 @@ export const createOrder = async (req, res) => {
         message: 'Payments are temporarily unavailable. Please try again later.',
       });
     }
-    const { bookingId } = req.body;
-    const userId = req.user.id.toString();
+    const { bookingId, payerEmail } = req.body;
 
     const booking = await Booking.findById(bookingId).populate('roomId');
     if (!booking)
       return res.status(404).json({ success: false, message: 'Booking not found' });
-    console.log('Booking guestId:', booking.guestId.toString());
-    console.log('current logged in userId:', userId);
-    console.log('decode userId from token:', req.user);
-    if (booking.guestId.toString() !== userId) {
+    const loggedInUserId = req.user?._id?.toString() || req.user?.id?.toString();
+    const bookingGuestEmail = (booking.guestContact?.email || '').toLowerCase();
+    const requesterEmail = (payerEmail || '').toLowerCase();
+
+    const isAuthorized =
+      (loggedInUserId && booking.guestId?.toString() === loggedInUserId) ||
+      (bookingGuestEmail && requesterEmail && bookingGuestEmail === requesterEmail);
+
+    if (!isAuthorized) {
       return res.status(403).json({
         success: false,
         message: 'You are not authorized to pay for this booking',
@@ -55,7 +59,7 @@ export const createOrder = async (req, res) => {
     // ✅ Save payment record
     await Payment.create({
       bookingId,
-      userId,
+      userId: booking.guestId || loggedInUserId,
       razorpayOrderId: order.id,
       amount: amountPaise,
       currency: 'INR',

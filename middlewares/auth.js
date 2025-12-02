@@ -69,4 +69,37 @@ const protect = async (req, res, next) => {
   }
 };
 
+// Optional auth: attaches req.user when token present, but never blocks the request
+export const optionalAuth = async (req, res, next) => {
+  try {
+    let token = req.cookies?.token;
+
+    if (!token && req.headers.authorization?.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) return next();
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      algorithms: ['HS256'],
+    });
+
+    const user = await User.findById(decoded.id || decoded._id).select('-password');
+    if (user) {
+      req.user = {
+        id: user._id,
+        _id: user._id,
+        email: user.email,
+        role: user.role,
+        name: user.name
+      };
+    }
+  } catch (err) {
+    // Swallow errors to keep request public; log for diagnostics
+    console.warn('optionalAuth skip:', err?.message || err);
+  }
+
+  next();
+};
+
 export default protect;

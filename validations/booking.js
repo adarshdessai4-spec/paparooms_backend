@@ -17,4 +17,7 @@ export const createBookingSchema = Joi.object({
         'number.base': 'Guests must be a number.',
         'number.min': 'There must be at least 1 guest.'
     }),
+    guestName: Joi.string().trim().min(2).max(120).optional(),
+    guestEmail: Joi.string().trim().email().optional(),
+    guestPhone: Joi.string().trim().optional(),
 });

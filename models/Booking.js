@@ -4,6 +4,11 @@ const bookingSchema = new Schema({
   roomId: { type: Types.ObjectId, ref: 'Room', required: true },
   listingId: { type: Types.ObjectId, ref: 'Listing', required: true },
   guestId: { type: Types.ObjectId, ref: 'User', required: true },
+  guestContact: {
+    name: { type: String, trim: true },
+    email: { type: String, trim: true, lowercase: true },
+    phone: { type: String, trim: true },
+  },
   ownerId: { type: Types.ObjectId, ref: 'User', required: true },
   checkIn: { type: Date, required: true },
   checkOut: { type: Date, required: true },

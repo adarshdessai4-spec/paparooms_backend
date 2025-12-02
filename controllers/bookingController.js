@@ -5,14 +5,42 @@ import Room from "../models/Room.js";
 import Listing from "../models/Listing.js";
 import User from "../models/User.js";
 import { sendEmail } from "../middlewares/mailer.js"; // ✅ email helper
+import crypto from "crypto";
+
+const generateTempPassword = () => crypto.randomBytes(9).toString("base64");
+
+const ensureGuestUser = async ({ name, email, phone, session }) => {
+  if (!email) return null;
+
+  const existing = await User.findOne({ email }).session(session || null);
+  if (existing) {
+    let dirty = false;
+    if (!existing.name && name) { existing.name = name; dirty = true; }
+    if (!existing.phone && phone) { existing.phone = phone; dirty = true; }
+    if (dirty) await existing.save({ session });
+    return existing;
+  }
+
+  const [created] = await User.create([{
+    name: name || email.split("@")[0] || "Guest",
+    email,
+    phone,
+    password: generateTempPassword(),
+    role: "guest",
+    authProvider: "local",
+    isVerified: false,
+  }], { session });
+
+  return created;
+};
 
 export const createBooking = async (req, res) => {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
 
-    const { roomId, checkIn, checkOut, guests } = req.body;
-    const guestId = req.user.id;
+    const { roomId, checkIn, checkOut, guests, guestName, guestEmail, guestPhone } = req.body;
+    const authUser = req.user;
 
     // ✅ Validate dates
     const today = new Date();
@@ -71,12 +99,51 @@ export const createBooking = async (req, res) => {
     );
     const totalAmount = nights * room.pricePerNight;
 
+    // ✅ Resolve guest (logged-in or walk-in with contact details)
+    const contactEmail = (guestEmail || authUser?.email || "").trim().toLowerCase();
+    if (!authUser && !contactEmail) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Guest email is required to place a booking",
+      });
+    }
+
+    const contactName = guestName || authUser?.name || "Guest";
+    const contactPhone = guestPhone || authUser?.phone || "";
+
+    let guestUserId = authUser?._id || authUser?.id;
+    if (!guestUserId) {
+      const guestUser = await ensureGuestUser({
+        name: contactName,
+        email: contactEmail,
+        phone: contactPhone,
+        session,
+      });
+      guestUserId = guestUser?._id;
+    }
+
+    if (!guestUserId) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Unable to create guest profile for booking",
+      });
+    }
+
     const booking = await Booking.create(
       [
         {
           roomId,
           listingId: listing._id,
-          guestId,
+          guestId: guestUserId,
+          guestContact: {
+            name: contactName,
+            email: contactEmail || authUser?.email,
+            phone: contactPhone,
+          },
           ownerId,
           checkIn: checkInDate,
           checkOut: checkOutDate,
@@ -94,7 +161,7 @@ export const createBooking = async (req, res) => {
 
     // ✅ Send email to Guest
     await sendEmail({
-      to: req.user.email,
+      to: contactEmail || authUser?.email,
       subject: "Booking Created - Payment Pending",
       html: `
         <h2>Your booking request is created!</h2>
@@ -228,7 +295,6 @@ export const cancelBooking = async (req, res) => {
     });
   }
 };
-
 
 
 
