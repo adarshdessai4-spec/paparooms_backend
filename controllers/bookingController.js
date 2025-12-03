@@ -1,5 +1,4 @@
 // controllers/bookingController.js
-import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import Room from "../models/Room.js";
 import Listing from "../models/Listing.js";
@@ -9,15 +8,15 @@ import crypto from "crypto";
 
 const generateTempPassword = () => crypto.randomBytes(9).toString("base64");
 
-const ensureGuestUser = async ({ name, email, phone, session }) => {
+const ensureGuestUser = async ({ name, email, phone }) => {
   if (!email) return null;
 
-  const existing = await User.findOne({ email }).session(session || null);
+  const existing = await User.findOne({ email });
   if (existing) {
     let dirty = false;
     if (!existing.name && name) { existing.name = name; dirty = true; }
     if (!existing.phone && phone) { existing.phone = phone; dirty = true; }
-    if (dirty) await existing.save({ session });
+    if (dirty) await existing.save();
     return existing;
   }
 
@@ -29,16 +28,13 @@ const ensureGuestUser = async ({ name, email, phone, session }) => {
     role: "guest",
     authProvider: "local",
     isVerified: false,
-  }], { session });
+  }]);
 
   return created;
 };
 
 export const createBooking = async (req, res) => {
-  const session = await mongoose.startSession();
   try {
-    session.startTransaction();
-
     const { roomId, checkIn, checkOut, guests, guestName, guestEmail, guestPhone } = req.body;
     const authUser = req.user;
 
@@ -64,11 +60,11 @@ export const createBooking = async (req, res) => {
     }
 
     // ✅ Check room & listing
-    const room = await Room.findById(roomId).session(session);
+    const room = await Room.findById(roomId);
     if (!room)
       return res.status(404).json({ success: false, message: "Room not found" });
 
-    const listing = await Listing.findById(room.listingId).session(session);
+    const listing = await Listing.findById(room.listingId);
     if (!listing)
       return res.status(404).json({ success: false, message: "Listing not found" });
 
@@ -82,11 +78,9 @@ export const createBooking = async (req, res) => {
       $or: [
         { checkIn: { $lt: checkOutDate }, checkOut: { $gt: checkInDate } },
       ],
-    }).session(session);
+    });
 
     if (overlappingBooking) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         success: false,
         message: "Room already booked for selected dates",
@@ -102,8 +96,6 @@ export const createBooking = async (req, res) => {
     // ✅ Resolve guest (logged-in or walk-in with contact details)
     const contactEmail = (guestEmail || authUser?.email || "").trim().toLowerCase();
     if (!authUser && !contactEmail) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         success: false,
         message: "Guest email is required to place a booking",
@@ -119,14 +111,11 @@ export const createBooking = async (req, res) => {
         name: contactName,
         email: contactEmail,
         phone: contactPhone,
-        session,
       });
       guestUserId = guestUser?._id;
     }
 
     if (!guestUserId) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         success: false,
         message: "Unable to create guest profile for booking",
@@ -134,30 +123,24 @@ export const createBooking = async (req, res) => {
     }
 
     const booking = await Booking.create(
-      [
-        {
-          roomId,
-          listingId: listing._id,
-          guestId: guestUserId,
-          guestContact: {
-            name: contactName,
-            email: contactEmail || authUser?.email,
-            phone: contactPhone,
-          },
-          ownerId,
-          checkIn: checkInDate,
-          checkOut: checkOutDate,
-          guests,
-          totalAmount,
-          status: "pending",
-          paymentStatus: "unpaid",
+      {
+        roomId,
+        listingId: listing._id,
+        guestId: guestUserId,
+        guestContact: {
+          name: contactName,
+          email: contactEmail || authUser?.email,
+          phone: contactPhone,
         },
-      ],
-      { session }
+        ownerId,
+        checkIn: checkInDate,
+        checkOut: checkOutDate,
+        guests,
+        totalAmount,
+        status: "pending",
+        paymentStatus: "unpaid",
+      }
     );
-
-    await session.commitTransaction();
-    session.endSession();
 
     // ✅ Send email to Guest
     await sendEmail({
@@ -191,12 +174,10 @@ export const createBooking = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Booking created, waiting for payment",
-      booking: booking[0],
+      booking,
     });
   } catch (err) {
-    console.error("Booking error:", err);
-    await session.abortTransaction();
-    session.endSession();
+    console.error("Booking error:", err?.stack || err);
 
     return res.status(500).json({
       success: false,
@@ -295,8 +276,3 @@ export const cancelBooking = async (req, res) => {
     });
   }
 };
-
-
-
-
-
